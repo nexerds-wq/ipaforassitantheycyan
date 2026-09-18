@@ -1,1 +1,1 @@
-Enable Keep listening. Select iPhone first. Grant microphone and speech permission. Say Hey Jarvis and watch microphone input, Live speech, and Last detected. Use Test Glasses to test the separate control connection. See README.md for build instructions and limitations.
+Build/install V5.2. Open once, allow microphone and speech, select microphone and glasses. Turn on Keep listening and Auto reconnect. Verify Audio capture: Active, then go Home or lock the phone. Do not swipe the app away. Background/device behavior must be tested on your iPhone. See README.md.

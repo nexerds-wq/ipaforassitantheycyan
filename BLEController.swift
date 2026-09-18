@@ -124,6 +124,7 @@ final class BLEController: NSObject, ObservableObject, CBCentralManagerDelegate,
               autoReconnect,
               let id = savedPeripheralID else { return }
 
+        if let activePeripheral, activePeripheral.state == .connecting { return }
         if let activePeripheral, activePeripheral.state == .connected {
             if writeCharacteristic == nil {
                 activePeripheral.delegate = self
@@ -226,11 +227,7 @@ final class BLEController: NSObject, ObservableObject, CBCentralManagerDelegate,
                 powerContinuation = nil
                 continuation.resume()
             }
-            if autoReconnect {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.reconnectSavedGlasses()
-                }
-            }
+            if autoReconnect { reconnectSavedGlasses() }
         } else if central.state == .poweredOff {
             status = "Bluetooth is off"
             isConnected = false
@@ -302,7 +299,9 @@ final class BLEController: NSObject, ObservableObject, CBCentralManagerDelegate,
             finishWake(error: error ?? JarvisBLEError.disconnected)
         }
         status = "Glasses disconnected"
-        scheduleReconnect()
+        // Register a pending connection while this Bluetooth event has execution time.
+        // Core Bluetooth can maintain it while the app is suspended.
+        reconnectSavedGlasses()
     }
 
     private func scheduleReconnect() {
@@ -363,6 +362,8 @@ final class BLEController: NSObject, ObservableObject, CBCentralManagerDelegate,
                 isConnected = true
                 status = "Restored glasses connection"
                 peripheral.discoverServices([controlService])
+            } else if peripheral.state == .disconnected, autoReconnect {
+                reconnectSavedGlasses()
             }
         }
     }

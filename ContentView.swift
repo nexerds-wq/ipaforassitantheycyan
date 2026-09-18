@@ -189,6 +189,11 @@ struct ContentView: View {
                 wakeWord.setEnabled(true)
             }
 
+            infoRow("App", wakeWord.appInBackground ? "Background" : "Foreground")
+            infoRow("Audio capture", wakeWord.isCapturingAudio ? "Active" : "Stopped")
+            Text("Start listening here, then go Home or lock your iPhone. Keep listening enabled. Swiping the app away stops it. Calls may interrupt recording.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             infoRow("Listener", wakeWord.isListening ? "Listening" : "Stopped")
             infoRow("Microphone", wakeWord.inputRoute)
             infoRow("Last detected", wakeWord.lastDetected)
@@ -256,7 +261,7 @@ struct ContentView: View {
                 .font(.headline)
             Text("Listening uses battery and stays active while iOS allows this recording session. Force-quitting stops it. Calls and other microphone users can interrupt it.")
             Text("A moving meter confirms audio input. Live speech confirms transcription. Last detected confirms the phrase matched. Test Glasses checks the separate wake command.")
-            Text("Speech sessions renew with short gaps. This is still speech recognition, not a dedicated always-on wake-word model. Test background and locked-screen behavior on your iPhone.")
+            Text("The microphone stays active while speech sessions renew; phrase recognition can briefly pause during renewal. This is still speech recognition, not a dedicated always-on wake-word model. Test background and locked-screen behavior on your iPhone.")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

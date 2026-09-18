@@ -2,6 +2,26 @@ import Foundation
 import AVFoundation
 import Speech
 
+// Serializes audio delivery with speech-request replacement across audio/main threads.
+private final class SpeechAudioSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+
+    func replace(with next: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock()
+        let old = request
+        request = next
+        old?.endAudio()
+        lock.unlock()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        request?.append(buffer)
+        lock.unlock()
+    }
+}
+
 @MainActor
 final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDelegate {
     static let shared = WakeWordManager()
@@ -72,6 +92,15 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var audioEngine = AVAudioEngine()
+    private let audioSink = SpeechAudioSink()
+    private var captureGeneration = UUID()
+    @Published private(set) var isCapturingAudio = false
+    @Published private(set) var appInBackground = false
+
+    func setAppInBackground(_ background: Bool) {
+        appInBackground = background
+        // Entering background never tears down active recording.
+    }
     private var generation = UUID()
     private var starting = false
     private var interrupted = false
@@ -189,7 +218,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     func resumeIfNeeded() {
-        guard enabled, !isListening else { return }
+        guard enabled, !isListening, restartTask == nil, !routeBlocked else { return }
         intentionalStop = false
         Task { await startWithPermissions() }
     }
@@ -265,7 +294,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     private func startRecognition() {
         guard enabled, !intentionalStop, !interrupted, !routeBlocked else { return }
 
-        stopRecognitionOnly()
+        stopSpeechOnly()
 
         guard let recognizer, recognizer.isAvailable else {
             status = "Speech recognition is unavailable"
@@ -305,6 +334,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             request.taskHint = .search
 
             if onDeviceOnly && !recognizer.supportsOnDeviceRecognition {
+                stopRecognitionOnly()
                 status = "On-device speech is unavailable for English on this iPhone"
                 return
             }
@@ -315,32 +345,8 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             }
             recognitionRequest = request
 
-            let inputNode = audioEngine.inputNode
-            let format = inputNode.outputFormat(forBus: 0)
-            guard format.sampleRate > 0, format.channelCount > 0 else {
-                status = "Microphone audio format is unavailable"
-                scheduleRestart(after: 1.0)
-                return
-            }
-
+            audioSink.replace(with: request)
             let sessionID = generation
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-                // Capture this request, never a mutable request belonging to another session.
-                request.append(buffer)
-                let samples = buffer.floatChannelData?[0]
-                var sum: Float = 0
-                if let samples {
-                    for index in 0..<Int(buffer.frameLength) { sum += samples[index] * samples[index] }
-                }
-                let rms = sqrt(sum / Float(max(1, buffer.frameLength)))
-                let level = max(0, min(1, (20 * log10(max(rms, 0.00001)) + 60) / 60))
-                Task { @MainActor [weak self] in
-                    guard let self, self.generation == sessionID else { return }
-                    self.inputLevel = level
-                }
-            }
-            tapInstalled = true
-
             recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 Task { @MainActor in
                     guard let self, self.generation == sessionID, self.enabled, !self.interrupted else { return }
@@ -348,10 +354,37 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
                 }
             }
 
-            audioEngine.prepare()
-            try audioEngine.start()
+            if !audioEngine.isRunning {
+                let inputNode = audioEngine.inputNode
+                let format = inputNode.outputFormat(forBus: 0)
+                guard format.sampleRate > 0, format.channelCount > 0 else {
+                    throw NSError(domain: "JarvisAudio", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "Microphone audio format is unavailable"])
+                }
+                if tapInstalled { inputNode.removeTap(onBus: 0) }
+                captureGeneration = UUID()
+                let captureID = captureGeneration
+                let sink = audioSink
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                    sink.append(buffer)
+                    var sum: Float = 0
+                    if let samples = buffer.floatChannelData?[0] {
+                        for index in 0..<Int(buffer.frameLength) { sum += samples[index] * samples[index] }
+                    }
+                    let rms = sqrt(sum / Float(max(1, buffer.frameLength)))
+                    let level = max(0, min(1, (20 * log10(max(rms, 0.00001)) + 60) / 60))
+                    Task { @MainActor [weak self] in
+                        guard let self, self.captureGeneration == captureID else { return }
+                        self.inputLevel = level
+                    }
+                }
+                tapInstalled = true
+                audioEngine.prepare()
+                try audioEngine.start()
+                captureRoute = routeSignature(session)
+                isCapturingAudio = true
+            }
 
-            captureRoute = routeSignature(session)
             isListening = true
             liveText = ""
             status = "Listening for “\(effectiveWakePhrase)” · \(sensitivity.title)"
@@ -546,7 +579,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     private func restartRecognition(after delay: TimeInterval) {
-        stopRecognitionOnly()
+        stopSpeechOnly()
         scheduleRestart(after: delay)
     }
 
@@ -590,32 +623,35 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             await MainActor.run {
                 guard let self, self.enabled, !self.intentionalStop else { return }
                 self.status = "Applying wake-word settings..."
+                self.stopRecognitionOnly()
                 self.restartRecognition(after: 0.08)
             }
         }
     }
 
-    private func stopRecognitionOnly() {
-        generation = UUID() // Invalidate callbacks BEFORE cancellation.
-        inputLevel = 0
+    private func stopSpeechOnly() {
+        generation = UUID() // Invalidate callbacks before cancelling the old task.
         restartTask?.cancel()
         restartTask = nil
         rotationTask?.cancel()
         rotationTask = nil
-
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        if tapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-
-        recognitionRequest?.endAudio()
+        audioSink.replace(with: nil)
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
         isListening = false
+    }
+
+    private func stopRecognitionOnly() {
+        stopSpeechOnly()
+        captureGeneration = UUID()
+        if audioEngine.isRunning { audioEngine.stop() }
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        isCapturingAudio = false
+        inputLevel = 0
     }
 
     func stop(deactivateAudio: Bool) {
@@ -659,6 +695,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             }
             self.routeRecoveries.append(now)
             self.status = "Microphone changed · reconnecting audio"
+            self.stopRecognitionOnly()
             self.restartRecognition(after: 0.1)
         }
     }

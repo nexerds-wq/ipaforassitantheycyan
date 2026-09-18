@@ -1,24 +1,25 @@
-# V5.1 microphone stability fix
+# Jarvis Glasses V5.2 — background capture
 
-V5 restarted audio for every route notification, including notifications caused by its own setup. V5.1 compares the actual input identity, sample rate and channel count after settling; unchanged and output-only notifications no longer restart the engine. Audio category and activation are applied only when needed. iPhone mode does not enable Bluetooth HFP. Bluetooth mode remembers the chosen device within this app session rather than hopping between available headsets.
+Build and install this source using the included GitHub Actions workflow (Build Jarvis Glasses V5.2 IPA), or generate the Xcode project with XcodeGen on a Mac. Sign the unsigned IPA using your usual installation method.
 
-Repeated genuine route changes stop automatic recovery after three attempts in 15 seconds and display an error. Select another microphone or tap Restart listener to retry. A missing selected Bluetooth microphone does not silently switch to another headset.
+Open the app, grant microphone/speech access, select your microphone and glasses, enable Keep listening and Auto reconnect. Verify Audio capture is Active and Live speech updates. Go Home or lock the phone; leave the app in the app switcher. Say Hey Jarvis.
 
-Build/install this update using the included GitHub Actions workflow or XcodeGen on a Mac. This ZIP contains source, not an installed app. Choose iPhone or Bluetooth / glasses once, then enable Keep listening.
+The audio and bluetooth-central background declarations were already present. This update keeps the actual microphone engine/tap running across speech-task renewals, finals and speech errors. A locked handoff swaps speech requests safely between the main thread and audio callback. Recognition still has brief renewal gaps; audio is not saved or buffered across those gaps. Audio continues to be processed for wake detection. On-device speech is preferred when supported; otherwise recognition may use Apple's servers.
 
-Validation performed here: source checks, project/plist checks and ZIP integrity. Xcode compilation and actual iPhone/glasses audio behavior remain untested. On device: check stable input for two minutes, switch once between phone and glasses, disconnect/reconnect glasses, and test a call interruption. A normal output-only route notification should not reset live speech.
+Microphone changes, calls, media resets and disabling listening still stop/rebuild capture. V5.1 microphone stability guards remain. Bluetooth initialization now runs at application launch for restoration, and disconnect/power-on callbacks register reconnection directly rather than depending on a delayed timer. No app reopening, silent audio, or background-task timer is used to simulate continuous execution.
 
+This does not modify glasses firmware or reproduce Hey Cyan internals. It does not guarantee recovery after force-quit, reboot, iOS termination, or microphone contention. Reopen after force-quit or reboot. Active recording uses battery and shows the iOS microphone indicator. Unsupported on-device-only settings stop capture explicitly.
 
-Enable Keep listening and grant microphone/speech access. Existing installs retain the saved on/off switch; new installs default on. Select iPhone first, say Hey Jarvis, and inspect the input meter, live speech and Last detected. Test Glasses independently to verify the BLE command.
+Validation on Windows: source lifecycle checks, plist/project references, ZIP integrity. Xcode compilation, iPhone background execution, speech accuracy and glasses behavior remain untested.
 
-For glasses audio, pair the glasses in iPhone Settings > Bluetooth and select Bluetooth / glasses. A BLE connection in this app does not carry microphone audio. An unavailable call microphone produces an explicit error rather than silently choosing the phone.
+Device acceptance checks:
+1. Enable listening in foreground; speak Hey Jarvis and confirm Last detected plus glasses response.
+2. Go Home for 3 minutes (crosses multiple speech renewals), speak again.
+3. Lock for 10 minutes, speak every minute; record misses and Last detected afterward.
+4. End a phone call and test resumed audio; if iOS refuses recovery reopen the app.
+5. Disconnect/reconnect glasses while in background; test wake again.
+6. Disable Keep listening: audio capture must stop and not restart from route notifications.
+7. Force-quit: expect no app wake detection; reopen and confirm recovery.
 
-Fixed: late callbacks from cancelled sessions restarting newer sessions; overlapping permission starts; route changes leaving an obsolete audio tap; audio-engine reuse after media-services reset; hidden speech errors; on-device-only silently using network recognition. On-device recognition is preferred when supported. Otherwise Apple server recognition is used unless on-device-only is set.
-
-This is still Apple Speech transcription plus phrase matching. Speech task renewals have short recording gaps. Active background audio is declared, but indefinite background/locked detection is not guaranteed. Force-quitting stops listening; calls interrupt it. No dedicated wake-word model or glasses firmware was added.
-
-Build: upload all files including .github/workflows/build-ipa.yml to your repository root. Run Build Jarvis Glasses V5 IPA in GitHub Actions, then sign/install its unsigned IPA using your usual process. Alternatively generate the project using XcodeGen and build on a Mac. No account changes or upload were performed here.
-
-Validation: source/package checks only on Windows. Xcode compilation, on-phone audio, Bluetooth, lock-screen behavior and actual detection accuracy have NOT been tested.
-
-Device checks: (1) iPhone mic and phrase ten times; (2) Bluetooth mic and phrase ten times; (3) change input during listening; (4) stay quiet for two minutes then speak; (5) background and lock for five minutes; (6) receive/end a call; (7) switch listening off and ensure no restart. Record misses and the displayed error/route.
+References: https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/record
+https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules

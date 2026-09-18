@@ -1,7 +1,17 @@
 import SwiftUI
+import UIKit
+
+final class JarvisAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        _ = BLEController.shared
+        return true
+    }
+}
 
 @main
 struct JarvisGlassesApp: App {
+    @UIApplicationDelegateAdaptor(JarvisAppDelegate.self) private var appDelegate
     @StateObject private var coordinator = JarvisCoordinator.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -14,8 +24,7 @@ struct JarvisGlassesApp: App {
                     coordinator.resumeServices()
                 }
                 .onChange(of: scenePhase) { _, newPhase in
-                    // Do NOT stop the listener in background. UIBackgroundModes=audio keeps
-                    // the active microphone pipeline alive while the phone is locked/backgrounded.
+                    coordinator.wakeWord.setAppInBackground(newPhase == .background)
                     if newPhase == .active {
                         coordinator.resumeServices()
                     }
