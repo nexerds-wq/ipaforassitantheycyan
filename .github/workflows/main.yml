@@ -1,34 +1,74 @@
-name: JarvisGlasses
+name: Build Jarvis Glasses V3.1 IPA
 
-options:
-  bundleIdPrefix: com.nexer
-  deploymentTarget:
-    iOS: "18.0"
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
 
-settings:
-  base:
-    SWIFT_VERSION: 5.0
-    PRODUCT_BUNDLE_IDENTIFIER: com.nexer.jarvisglasses
-    MARKETING_VERSION: 3.1
-    CURRENT_PROJECT_VERSION: 4
-    IPHONEOS_DEPLOYMENT_TARGET: 18.0
+jobs:
+  build:
+    runs-on: macos-latest
 
-targets:
-  JarvisGlasses:
-    type: application
-    platform: iOS
-    sources:
-      - path: BLEController.swift
-      - path: ContentView.swift
-      - path: JarvisCoordinator.swift
-      - path: JarvisGlassesApp.swift
-      - path: WakeJarvisIntent.swift
-      - path: WakeWordManager.swift
-    settings:
-      base:
-        INFOPLIST_FILE: Info.plist
-        GENERATE_INFOPLIST_FILE: NO
-        TARGETED_DEVICE_FAMILY: "1"
-        SUPPORTS_MACCATALYST: NO
-    scheme:
-      gatherCoverageData: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show repository layout
+        run: |
+          pwd
+          find . -maxdepth 3 -type f | sort
+
+      - name: Verify required files
+        run: |
+          set -e
+          for f in project.yml Info.plist BLEController.swift ContentView.swift JarvisCoordinator.swift JarvisGlassesApp.swift WakeJarvisIntent.swift WakeWordManager.swift; do
+            test -f "$f" || { echo "MISSING REQUIRED FILE: $f"; exit 1; }
+          done
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          set -euxo pipefail
+          xcodegen generate --spec project.yml
+          test -d JarvisGlasses.xcodeproj
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned iPhone app
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -project JarvisGlasses.xcodeproj \
+            -scheme JarvisGlasses \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Verify app exists
+        run: |
+          set -e
+          test -d build/Build/Products/Release-iphoneos/JarvisGlasses.app
+          ls -la build/Build/Products/Release-iphoneos/JarvisGlasses.app
+
+      - name: Package unsigned IPA
+        run: |
+          set -euxo pipefail
+          rm -rf Payload JarvisGlasses-V3.1-unsigned.ipa
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/JarvisGlasses.app Payload/
+          /usr/bin/zip -qry JarvisGlasses-V3.1-unsigned.ipa Payload
+          ls -lh JarvisGlasses-V3.1-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: JarvisGlasses-V3.1-unsigned-ipa
+          path: JarvisGlasses-V3.1-unsigned.ipa
+          if-no-files-found: error
