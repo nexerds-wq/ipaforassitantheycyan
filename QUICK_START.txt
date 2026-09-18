@@ -1,16 +1,13 @@
-JARVIS GLASSES V3 - QUICK START
+JARVIS GLASSES V4 QUICK START
 
-1. Upload the whole V3 folder to GitHub.
-2. Actions -> Build Jarvis Glasses V3 IPA -> Run workflow.
-3. Install the generated IPA with Sideloadly.
-4. Open Jarvis Glasses -> Scan -> select M02S -> Test Glasses.
-5. Turn on Wake-word listening.
-6. Leave Wake phrase as Hey Jarvis for the first test.
-7. Set Sensitivity to High.
-8. Say Hey Jarvis several times while watching Live speech.
-9. If iOS hears a wrong version, add that version to Recognition aliases.
-10. If it still misses, use Max sensitivity.
-11. Lock the phone and test again.
+1. Build/install V4.
+2. Open it and connect M02S.
+3. Press Test Wake Action Now.
+4. iPhone Settings > Accessibility > Vocal Shortcuts.
+5. Add Action > Wake Jarvis.
+6. Train the phrase "Hey Jarvis" (or anything you want).
+7. Leave Vocal Shortcuts ON.
+8. Say the phrase with the app in the background.
+9. Lock the phone and test again.
 
-You can change the wake phrase to anything directly inside the app.
-Do not swipe-force-close the app if you want background listening.
+This System Wake method is the recommended one. The old app speech listener is only a backup.

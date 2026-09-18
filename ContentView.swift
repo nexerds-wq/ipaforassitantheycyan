@@ -1,16 +1,19 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var bluetooth: BLEController
     @EnvironmentObject var wakeWord: WakeWordManager
+    @AppStorage("jarvis.systemWakePhrase") private var systemWakePhrase = "Hey Jarvis"
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     header
+                    systemWakeCard
                     connectionCard
-                    wakeWordCard
+                    fallbackWakeCard
                     devicesCard
                     notesCard
                 }
@@ -22,19 +25,75 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            Image(systemName: wakeWord.isListening ? "waveform.circle.fill" : "waveform.circle")
+            Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 76))
-                .symbolEffect(.pulse, isActive: wakeWord.isListening)
 
             Text("Jarvis Glasses")
                 .font(.largeTitle.bold())
 
-            Text("Say “\(wakeWord.wakePhrase.isEmpty ? "Hey Jarvis" : wakeWord.wakePhrase)” → wake M02S")
+            Text("Siri-like wake uses iPhone Vocal Shortcuts")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
+    }
+
+    private var systemWakeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("System Wake — Recommended", systemImage: "iphone.and.waveform")
+                .font(.headline)
+
+            Text("This is the closest iPhone allows to Hey Siri for a third-party app. iOS listens for the phrase itself using on-device Vocal Shortcuts instead of waiting for normal speech-to-text.")
+                .font(.subheadline)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Phrase you want to train")
+                    .font(.caption.bold())
+                TextField("Hey Jarvis", text: $systemWakePhrase)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+            }
+
+            Button("Copy Phrase") {
+                UIPasteboard.general.string = systemWakePhrase.isEmpty ? "Hey Jarvis" : systemWakePhrase
+            }
+            .buttonStyle(.bordered)
+
+            Divider()
+
+            Text("SET IT UP ONCE")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+
+            setupRow("1", "Settings → Accessibility → Vocal Shortcuts")
+            setupRow("2", "Tap Add Action → Continue")
+            setupRow("3", "Choose the Jarvis action named ‘Wake Jarvis’")
+            setupRow("4", "Enter ‘\(systemWakePhrase.isEmpty ? "Hey Jarvis" : systemWakePhrase)’ and train it when iPhone asks")
+            setupRow("5", "Leave Vocal Shortcuts ON. Now test it with this app in the background, then with the phone locked")
+
+            Text("If Wake Jarvis does not appear there, open the Shortcuts app once, search Actions for ‘Wake Jarvis’, make a one-action shortcut, then select that shortcut in Vocal Shortcuts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button("Test Wake Action Now") {
+                Task {
+                    do {
+                        try await bluetooth.wakeSavedGlasses()
+                        await MainActor.run {
+                            bluetooth.status = "System Wake test → M02S wake sent ✓"
+                        }
+                    } catch {
+                        await MainActor.run {
+                            bluetooth.status = "System Wake test failed: \(error.localizedDescription)"
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .cardStyle()
     }
 
     private var connectionCard: some View {
@@ -70,18 +129,22 @@ struct ContentView: View {
         .cardStyle()
     }
 
-    private var wakeWordCard: some View {
+    private var fallbackWakeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Custom Background Wake Word", systemImage: "mic.badge.plus")
+            Label("App Listener — Backup", systemImage: "mic.badge.plus")
                 .font(.headline)
 
-            Toggle("Wake-word listening", isOn: Binding(
+            Text("Keep this as a backup. The System Wake above should be much more reliable for a short phrase like Hey Jarvis.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle("Use app wake-word listener too", isOn: Binding(
                 get: { wakeWord.enabled },
                 set: { wakeWord.setEnabled($0) }
             ))
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("Wake phrase")
+                Text("App listener phrase")
                     .font(.caption.bold())
                 TextField("Hey Jarvis", text: Binding(
                     get: { wakeWord.wakePhrase },
@@ -90,21 +153,6 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Recognition aliases")
-                    .font(.caption.bold())
-                TextField("Hey Jervis, Hey Jarvus", text: Binding(
-                    get: { wakeWord.aliasesText },
-                    set: { wakeWord.setAliasesText($0) }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-                Text("Comma separated. Add anything your iPhone usually hears instead of your wake phrase.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -120,15 +168,6 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu)
             }
-
-            Text(wakeWord.sensitivity.explanation)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Toggle("On-device recognition only", isOn: Binding(
-                get: { wakeWord.onDeviceOnly },
-                set: { wakeWord.setOnDeviceOnly($0) }
-            ))
 
             infoRow("Listener", wakeWord.isListening ? "Listening" : "Stopped")
             infoRow("Microphone", wakeWord.inputRoute)
@@ -149,11 +188,6 @@ struct ContentView: View {
                         .lineLimit(4)
                 }
             }
-
-            Button("Reset Wake Settings") {
-                wakeWord.resetWakeSettings()
-            }
-            .buttonStyle(.bordered)
         }
         .cardStyle()
     }
@@ -198,16 +232,26 @@ struct ContentView: View {
 
     private var notesCard: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Label("Better detection in V3", systemImage: "waveform.badge.magnifyingglass")
+            Label("Why V4 detects better", systemImage: "bolt.fill")
                 .font(.headline)
-            Text("V3 does not require an exact speech transcript anymore. It uses live partial speech, phrase biasing, recognition aliases, fuzzy matching, and automatically refreshes long speech sessions.")
-            Text("Start with High sensitivity. If it still misses you, use Max. If it wakes by accident, move down to Balanced or Strict.")
-            Text("For a misheard phrase, look at Live speech and add that wording under Recognition aliases. Example: if iOS hears ‘Hey Jervis,’ add it as an alias.")
-            Text("Keep Wake-word listening on before locking the phone. Do not swipe-force-close the app.")
+            Text("The older listener had to convert your microphone audio into text and then guess whether the text looked like Hey Jarvis. That is why it could miss a short phrase.")
+            Text("V4 adds an iOS system action specifically for Vocal Shortcuts. You train iPhone on your own voice, and iOS listens for that phrase on-device. This is much closer to how a real wake phrase should feel.")
+            Text("You can change the phrase whenever you want by editing or recreating the Vocal Shortcut. The app listener remains available as a backup.")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .cardStyle()
+    }
+
+    private func setupRow(_ number: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(number)
+                .font(.caption.bold())
+                .frame(width: 24, height: 24)
+                .background(.thinMaterial, in: Circle())
+            Text(text)
+                .font(.subheadline)
+        }
     }
 
     private func infoRow(_ title: String, _ value: String) -> some View {
