@@ -1,4 +1,13 @@
-# Jarvis Glasses V5 — listener repairs
+# V5.1 microphone stability fix
+
+V5 restarted audio for every route notification, including notifications caused by its own setup. V5.1 compares the actual input identity, sample rate and channel count after settling; unchanged and output-only notifications no longer restart the engine. Audio category and activation are applied only when needed. iPhone mode does not enable Bluetooth HFP. Bluetooth mode remembers the chosen device within this app session rather than hopping between available headsets.
+
+Repeated genuine route changes stop automatic recovery after three attempts in 15 seconds and display an error. Select another microphone or tap Restart listener to retry. A missing selected Bluetooth microphone does not silently switch to another headset.
+
+Build/install this update using the included GitHub Actions workflow or XcodeGen on a Mac. This ZIP contains source, not an installed app. Choose iPhone or Bluetooth / glasses once, then enable Keep listening.
+
+Validation performed here: source checks, project/plist checks and ZIP integrity. Xcode compilation and actual iPhone/glasses audio behavior remain untested. On device: check stable input for two minutes, switch once between phone and glasses, disconnect/reconnect glasses, and test a call interruption. A normal output-only route notification should not reset live speech.
+
 
 Enable Keep listening and grant microphone/speech access. Existing installs retain the saved on/off switch; new installs default on. Select iPhone first, say Hey Jarvis, and inspect the input meter, live speech and Last detected. Test Glasses independently to verify the BLE command.
 
