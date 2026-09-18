@@ -1,4 +1,4 @@
-name: Build Jarvis Glasses V3 IPA
+name: Build Jarvis Glasses V3.1 IPA
 
 on:
   workflow_dispatch:
@@ -8,22 +8,38 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Show repository layout
+        run: |
+          pwd
+          find . -maxdepth 3 -type f | sort
+
+      - name: Verify required files
+        run: |
+          set -e
+          for f in project.yml Info.plist BLEController.swift ContentView.swift JarvisCoordinator.swift JarvisGlassesApp.swift WakeJarvisIntent.swift WakeWordManager.swift; do
+            test -f "$f" || { echo "MISSING REQUIRED FILE: $f"; exit 1; }
+          done
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: |
+          set -euxo pipefail
+          xcodegen generate --spec project.yml
+          test -d JarvisGlasses.xcodeproj
 
       - name: Show Xcode version
         run: xcodebuild -version
 
       - name: Build unsigned iPhone app
         run: |
-          set -e
+          set -euxo pipefail
           xcodebuild \
             -project JarvisGlasses.xcodeproj \
             -scheme JarvisGlasses \
@@ -35,16 +51,24 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Package unsigned IPA
+      - name: Verify app exists
         run: |
           set -e
-          rm -rf Payload
+          test -d build/Build/Products/Release-iphoneos/JarvisGlasses.app
+          ls -la build/Build/Products/Release-iphoneos/JarvisGlasses.app
+
+      - name: Package unsigned IPA
+        run: |
+          set -euxo pipefail
+          rm -rf Payload JarvisGlasses-V3.1-unsigned.ipa
           mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/JarvisGlasses.app Payload/
-          /usr/bin/zip -qry JarvisGlasses-V3-unsigned.ipa Payload
+          /usr/bin/zip -qry JarvisGlasses-V3.1-unsigned.ipa Payload
+          ls -lh JarvisGlasses-V3.1-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: JarvisGlasses-V3-unsigned-ipa
-          path: JarvisGlasses-V3-unsigned.ipa
+          name: JarvisGlasses-V3.1-unsigned-ipa
+          path: JarvisGlasses-V3.1-unsigned.ipa
+          if-no-files-found: error
