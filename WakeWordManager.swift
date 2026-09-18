@@ -42,7 +42,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
         }
     }
 
-    @Published private(set) var enabled: Bool = UserDefaults.standard.bool(forKey: "jarvis.wake.enabled")
+    @Published private(set) var enabled: Bool = UserDefaults.standard.object(forKey: "jarvis.wake.enabled") as? Bool ?? true
     @Published private(set) var isListening = false
     @Published private(set) var status = "Wake word is off"
     @Published private(set) var liveText = ""
@@ -71,7 +71,20 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     var onWake: (() -> Void)?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine = AVAudioEngine()
+    private var generation = UUID()
+    private var starting = false
+    private var interrupted = false
+    private var tapInstalled = false
+    private var routeTask: Task<Void, Never>?
+    @Published private(set) var inputLevel: Float = 0
+    @Published private(set) var microphone: String = UserDefaults.standard.string(forKey: "jarvis.microphone") ?? "iPhone"
+
+    func setMicrophone(_ value: String) {
+        microphone = value
+        UserDefaults.standard.set(value, forKey: "jarvis.microphone")
+        scheduleConfigurationRestart()
+    }
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var restartTask: Task<Void, Never>?
@@ -193,10 +206,13 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     private func startWithPermissions() async {
-        guard enabled else { return }
+        guard enabled, !starting, !interrupted else { return }
+        starting = true
+        defer { starting = false }
 
         status = "Requesting microphone permission..."
         let micAllowed = await requestMicrophonePermission()
+        guard enabled, !intentionalStop, !interrupted else { return }
         guard micAllowed else {
             status = "Microphone permission denied"
             isListening = false
@@ -205,6 +221,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
 
         status = "Requesting speech permission..."
         let speechAllowed = await requestSpeechPermission()
+        guard enabled, !intentionalStop, !interrupted else { return }
         guard speechAllowed else {
             status = "Speech recognition permission denied"
             isListening = false
@@ -235,7 +252,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     private func startRecognition() {
-        guard enabled, !intentionalStop else { return }
+        guard enabled, !intentionalStop, !interrupted else { return }
 
         stopRecognitionOnly()
 
@@ -249,12 +266,12 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(
                 .playAndRecord,
-                mode: .voiceChat,
+                mode: .default,
                 options: [.allowBluetooth, .defaultToSpeaker]
             )
             try? session.setPreferredIOBufferDuration(0.012)
             try session.setActive(true, options: [])
-            preferGlassesMicrophone(session)
+            try selectMicrophone(session)
             updateInputRoute(session)
 
             let request = SFSpeechAudioBufferRecognitionRequest()
@@ -273,7 +290,11 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             request.contextualStrings = context
             request.taskHint = .search
 
-            if onDeviceOnly && recognizer.supportsOnDeviceRecognition {
+            if onDeviceOnly && !recognizer.supportsOnDeviceRecognition {
+                status = "On-device speech is unavailable for English on this iPhone"
+                return
+            }
+            if recognizer.supportsOnDeviceRecognition {
                 request.requiresOnDeviceRecognition = true
             } else {
                 request.requiresOnDeviceRecognition = false
@@ -288,14 +309,28 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
                 return
             }
 
-            inputNode.removeTap(onBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
-                self?.recognitionRequest?.append(buffer)
+            let sessionID = generation
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                // Capture this request, never a mutable request belonging to another session.
+                request.append(buffer)
+                let samples = buffer.floatChannelData?[0]
+                var sum: Float = 0
+                if let samples {
+                    for index in 0..<Int(buffer.frameLength) { sum += samples[index] * samples[index] }
+                }
+                let rms = sqrt(sum / Float(max(1, buffer.frameLength)))
+                let level = max(0, min(1, (20 * log10(max(rms, 0.00001)) + 60) / 60))
+                Task { @MainActor [weak self] in
+                    guard let self, self.generation == sessionID else { return }
+                    self.inputLevel = level
+                }
             }
+            tapInstalled = true
 
             recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 Task { @MainActor in
-                    self?.handleRecognition(result: result, error: error)
+                    guard let self, self.generation == sessionID, self.enabled, !self.interrupted else { return }
+                    self.handleRecognition(result: result, error: error)
                 }
             }
 
@@ -307,7 +342,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             status = "Listening for “\(effectiveWakePhrase)” · \(sensitivity.title)"
             scheduleHealthyRotation()
         } catch {
-            isListening = false
+            stopRecognitionOnly()
             status = "Listener error: \(error.localizedDescription)"
             scheduleRestart(after: 1.0)
         }
@@ -344,8 +379,9 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             }
         }
 
-        if error != nil, enabled, !intentionalStop {
-            restartRecognition(after: 0.45)
+        if let error, enabled, !intentionalStop {
+            status = "Speech retry: \(error.localizedDescription)"
+            restartRecognition(after: 1.5)
         }
     }
 
@@ -363,7 +399,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
             let phrase = normalize(rawPhrase)
             guard !phrase.isEmpty else { continue }
 
-            if cleanTranscript.contains(phrase) {
+            if (" " + cleanTranscript + " ").contains(" " + phrase + " ") {
                 return (1.0, phrase)
             }
 
@@ -463,22 +499,19 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
 
     // MARK: - Audio / restart reliability
 
-    private func preferGlassesMicrophone(_ session: AVAudioSession) {
-        guard let inputs = session.availableInputs else { return }
-
-        let preferred = inputs.first { input in
-            let name = input.portName.lowercased()
-            return input.portType == .bluetoothHFP && (
-                name.contains("m02") ||
-                name.contains("m01") ||
-                name.contains("cyan") ||
-                name.contains("glasses")
-            )
-        } ?? inputs.first(where: { $0.portType == .bluetoothHFP })
-
-        if let preferred {
-            try? session.setPreferredInput(preferred)
+    private func selectMicrophone(_ session: AVAudioSession) throws {
+        let inputs = session.availableInputs ?? []
+        let preferred: AVAudioSessionPortDescription?
+        if microphone == "iPhone" {
+            preferred = inputs.first { $0.portType == .builtInMic }
+        } else {
+            preferred = inputs.first { $0.portType == .bluetoothHFP }
         }
+        guard let preferred else {
+            throw NSError(domain: "JarvisAudio", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                microphone == "iPhone" ? "iPhone microphone unavailable" : "No Bluetooth call microphone. Pair glasses in iPhone Settings > Bluetooth, or select iPhone. BLE connection alone does not provide microphone audio."])
+        }
+        if session.preferredInput?.uid != preferred.uid { try session.setPreferredInput(preferred) }
     }
 
     private func updateInputRoute(_ session: AVAudioSession = .sharedInstance()) {
@@ -496,7 +529,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
 
     private func scheduleRestart(after delay: TimeInterval) {
         restartTask?.cancel()
-        guard enabled, !intentionalStop else { return }
+        guard enabled, !intentionalStop, !interrupted else { return }
 
         restartTask = Task { [weak self] in
             let nanos = UInt64(max(delay, 0.08) * 1_000_000_000)
@@ -511,7 +544,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
 
     private func scheduleHealthyRotation() {
         rotationTask?.cancel()
-        guard enabled, !intentionalStop else { return }
+        guard enabled, !intentionalStop, !interrupted else { return }
 
         // Speech recognition sessions can become stale during long runs. Rotating before
         // the common one-minute boundary makes background detection more consistent.
@@ -540,6 +573,8 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     private func stopRecognitionOnly() {
+        generation = UUID() // Invalidate callbacks BEFORE cancellation.
+        inputLevel = 0
         restartTask?.cancel()
         restartTask = nil
         rotationTask?.cancel()
@@ -548,7 +583,10 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
         if audioEngine.isRunning {
             audioEngine.stop()
         }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
 
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
@@ -558,6 +596,7 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     func stop(deactivateAudio: Bool) {
+        routeTask?.cancel()
         configurationRestartTask?.cancel()
         stopRecognitionOnly()
         liveText = ""
@@ -569,13 +608,14 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     @objc private func audioRouteChanged() {
-        let session = AVAudioSession.sharedInstance()
-        preferGlassesMicrophone(session)
-        updateInputRoute(session)
-
-        if enabled, !intentionalStop, !isListening {
-            status = "Audio route changed · recovering listener"
-            scheduleRestart(after: 0.18)
+        updateInputRoute()
+        guard enabled, !intentionalStop, !interrupted else { return }
+        routeTask?.cancel()
+        routeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.status = "Microphone changed · reconnecting audio"
+            self.restartRecognition(after: 0.1)
         }
     }
 
@@ -586,9 +626,12 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
 
         switch type {
         case .began:
+            interrupted = true
+            routeTask?.cancel()
             status = "Audio interrupted"
             stopRecognitionOnly()
         case .ended:
+            interrupted = false
             if enabled, !intentionalStop {
                 status = "Restarting wake listener..."
                 scheduleRestart(after: 0.25)
@@ -599,6 +642,9 @@ final class WakeWordManager: NSObject, ObservableObject, SFSpeechRecognizerDeleg
     }
 
     @objc private func mediaServicesReset() {
+        stopRecognitionOnly()
+        audioEngine = AVAudioEngine()
+        interrupted = false
         if enabled, !intentionalStop {
             status = "Audio system reset · recovering..."
             scheduleRestart(after: 0.4)

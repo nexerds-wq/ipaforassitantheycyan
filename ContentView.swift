@@ -11,9 +11,9 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
-                    systemWakeCard
-                    connectionCard
                     fallbackWakeCard
+                    connectionCard
+                    systemWakeCard
                     devicesCard
                     notesCard
                 }
@@ -31,7 +31,7 @@ struct ContentView: View {
             Text("Jarvis Glasses")
                 .font(.largeTitle.bold())
 
-            Text("Siri-like wake uses iPhone Vocal Shortcuts")
+            Text("Continuous app listening with live microphone feedback")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -41,7 +41,7 @@ struct ContentView: View {
 
     private var systemWakeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("System Wake — Recommended", systemImage: "iphone.and.waveform")
+            Label("Optional iOS Vocal Shortcut", systemImage: "iphone.and.waveform")
                 .font(.headline)
 
             Text("This is the closest iPhone allows to Hey Siri for a third-party app. iOS listens for the phrase itself using on-device Vocal Shortcuts instead of waiting for normal speech-to-text.")
@@ -131,14 +131,14 @@ struct ContentView: View {
 
     private var fallbackWakeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("App Listener — Backup", systemImage: "mic.badge.plus")
+            Label("Continuous Listener", systemImage: "mic.badge.plus")
                 .font(.headline)
 
-            Text("Keep this as a backup. The System Wake above should be much more reliable for a short phrase like Hey Jarvis.")
+            Text("Enable once and allow microphone and speech access. The app resumes listening when opened and retries interrupted sessions. Start with the iPhone microphone.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Toggle("Use app wake-word listener too", isOn: Binding(
+            Toggle("Keep listening", isOn: Binding(
                 get: { wakeWord.enabled },
                 set: { wakeWord.setEnabled($0) }
             ))
@@ -167,6 +167,26 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.menu)
+            }
+
+            Picker("Listen through", selection: Binding(
+                get: { wakeWord.microphone },
+                set: { wakeWord.setMicrophone($0) }
+            )) {
+                Text("iPhone").tag("iPhone")
+                Text("Bluetooth / glasses").tag("Bluetooth")
+            }
+            .pickerStyle(.segmented)
+
+            Text("Microphone input")
+                .font(.caption)
+            ProgressView(value: Double(wakeWord.inputLevel))
+            Text("Speak and check that the bar moves. Glasses need a Bluetooth call-audio connection in iPhone Settings; the app's BLE connection only sends controls.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Restart listener") {
+                wakeWord.setEnabled(false)
+                wakeWord.setEnabled(true)
             }
 
             infoRow("Listener", wakeWord.isListening ? "Listening" : "Stopped")
@@ -232,11 +252,11 @@ struct ContentView: View {
 
     private var notesCard: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Label("Why V4 detects better", systemImage: "bolt.fill")
+            Label("Listening limits", systemImage: "mic.fill")
                 .font(.headline)
-            Text("The older listener had to convert your microphone audio into text and then guess whether the text looked like Hey Jarvis. That is why it could miss a short phrase.")
-            Text("V4 adds an iOS system action specifically for Vocal Shortcuts. You train iPhone on your own voice, and iOS listens for that phrase on-device. This is much closer to how a real wake phrase should feel.")
-            Text("You can change the phrase whenever you want by editing or recreating the Vocal Shortcut. The app listener remains available as a backup.")
+            Text("Listening uses battery and stays active while iOS allows this recording session. Force-quitting stops it. Calls and other microphone users can interrupt it.")
+            Text("A moving meter confirms audio input. Live speech confirms transcription. Last detected confirms the phrase matched. Test Glasses checks the separate wake command.")
+            Text("Speech sessions renew with short gaps. This is still speech recognition, not a dedicated always-on wake-word model. Test background and locked-screen behavior on your iPhone.")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -1,13 +1,1 @@
-JARVIS GLASSES V4 QUICK START
-
-1. Build/install V4.
-2. Open it and connect M02S.
-3. Press Test Wake Action Now.
-4. iPhone Settings > Accessibility > Vocal Shortcuts.
-5. Add Action > Wake Jarvis.
-6. Train the phrase "Hey Jarvis" (or anything you want).
-7. Leave Vocal Shortcuts ON.
-8. Say the phrase with the app in the background.
-9. Lock the phone and test again.
-
-This System Wake method is the recommended one. The old app speech listener is only a backup.
+Enable Keep listening. Select iPhone first. Grant microphone and speech permission. Say Hey Jarvis and watch microphone input, Live speech, and Last detected. Use Test Glasses to test the separate control connection. See README.md for build instructions and limitations.
